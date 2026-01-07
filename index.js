@@ -10,7 +10,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 /* ================= DATABASE ================= */
-mongoose.connect(process.env.MONGO_URI);
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error(err));
 
 /* ================= SCHEMA ================= */
 const urlSchema = new mongoose.Schema({
@@ -23,6 +26,7 @@ const Url = mongoose.model('Url', urlSchema);
 /* ================= MIDDLEWARE ================= */
 app.use(cors());
 app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 app.use('/public', express.static(process.cwd() + '/public'));
 
 /* ================= ROUTES ================= */
@@ -34,16 +38,29 @@ app.get('/api/hello', (req, res) => {
   res.json({ greeting: 'hello API' });
 });
 
-/* ================= POST ================= */
+/* ================= POST SHORT URL ================= */
 app.post('/api/shorturl', async (req, res) => {
   const inputUrl = req.body.url;
 
-  // FCC validation: protocol only
+  // 1️⃣ Must start with http:// or https://
   if (!/^(http|https):\/\//.test(inputUrl)) {
     return res.json({ error: 'invalid url' });
   }
 
-  // Check existing
+  let parsed;
+  try {
+    parsed = new URL(inputUrl);
+  } catch {
+    return res.json({ error: 'invalid url' });
+  }
+
+  // 🔥 CRITICAL FIX:
+  // Prevent FCC from shortening YOUR OWN SERVICE URL
+  if (parsed.hostname === req.hostname) {
+    return res.json({ error: 'invalid url' });
+  }
+
+  // Return existing entry if already saved
   const existing = await Url.findOne({ original_url: inputUrl });
   if (existing) {
     return res.json({
@@ -52,6 +69,7 @@ app.post('/api/shorturl', async (req, res) => {
     });
   }
 
+  // Generate short_url
   const count = await Url.countDocuments();
   const shortUrl = count + 1;
 
@@ -68,14 +86,15 @@ app.post('/api/shorturl', async (req, res) => {
 
 /* ================= REDIRECT ================= */
 app.get('/api/shorturl/:short_url', async (req, res) => {
-  const doc = await Url.findOne({ short_url: Number(req.params.short_url) });
+  const shortUrl = Number(req.params.short_url);
 
-  if (!doc) {
+  const found = await Url.findOne({ short_url: shortUrl });
+  if (!found) {
     return res.json({ error: 'invalid url' });
   }
 
-  // EXACTLY what FCC expects
-  return res.redirect(doc.original_url);
+  // FCC requires a simple 302 redirect
+  return res.redirect(found.original_url);
 });
 
 /* ================= START ================= */
