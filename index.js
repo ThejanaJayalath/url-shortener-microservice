@@ -4,62 +4,82 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const path = require('path');
+const dns = require('dns');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 /* ================= DATABASE ================= */
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error(err));
+mongoose.connect(process.env.MONGO_URI);
 
 /* ================= SCHEMA ================= */
 const urlSchema = new mongoose.Schema({
-  original_url: { type: String, required: true },
-  short_url: { type: Number, required: true }
+  original_url: String,
+  short_url: Number
 });
 
 const Url = mongoose.model('Url', urlSchema);
 
 /* ================= MIDDLEWARE ================= */
 app.use(cors());
+
+// 🔥 BOTH are REQUIRED for FCC
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-app.use('/public', express.static(process.cwd() + '/public'));
+
+app.use('/public', express.static(`${process.cwd()}/public`));
 
 /* ================= ROUTES ================= */
-app.get('/', (req, res) => {
-  res.sendFile(path.join(process.cwd(), '/views/index.html'));
+app.get('/', function(req, res) {
+  res.sendFile(process.cwd() + '/views/index.html');
 });
 
-app.get('/api/hello', (req, res) => {
+app.get('/api/hello', function(req, res) {
   res.json({ greeting: 'hello API' });
 });
 
-/* ================= POST /api/shorturl ================= */
-app.post('/api/shorturl', async (req, res) => {
+/* ================= POST ================= */
+app.post('/api/shorturl', async function(req, res) {
   const inputUrl = req.body.url;
 
-  // 1️⃣ Must start with http:// or https://
-  if (!inputUrl || !/^(http|https):\/\//.test(inputUrl)) {
+  // Basic check - must have http:// or https://
+  if (!inputUrl || typeof inputUrl !== 'string') {
     return res.json({ error: 'invalid url' });
   }
 
-  let parsed;
+  // More lenient regex - just check for http:// or https:// at the start
+  if (!(/^https?:\/\//i).test(inputUrl)) {
+    return res.json({ error: 'invalid url' });
+  }
+
+  // Parse URL to extract hostname
+  let hostname;
   try {
-    parsed = new URL(inputUrl);
-  } catch {
+    const urlObj = new URL(inputUrl);
+    hostname = urlObj.hostname;
+    
+    // Must have a hostname
+    if (!hostname) {
+      return res.json({ error: 'invalid url' });
+    }
+  } catch (error) {
     return res.json({ error: 'invalid url' });
   }
 
-  // 2️⃣ CRITICAL: Prevent shortening YOUR OWN SERVICE URL
-  if (parsed.hostname === req.hostname) {
+  // Use dns.lookup to verify the hostname (as per FCC hint)
+  // Wrap in promise to handle properly
+  try {
+    await new Promise((resolve, reject) => {
+      dns.lookup(hostname, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } catch (error) {
     return res.json({ error: 'invalid url' });
   }
 
-  // 3️⃣ Return existing entry if already stored
+  // URL is valid, check if it already exists
   const existing = await Url.findOne({ original_url: inputUrl });
   if (existing) {
     return res.json({
@@ -68,7 +88,7 @@ app.post('/api/shorturl', async (req, res) => {
     });
   }
 
-  // 4️⃣ Generate short_url safely
+  // Create new short URL
   const count = await Url.countDocuments();
   const shortUrl = count + 1;
 
@@ -83,26 +103,28 @@ app.post('/api/shorturl', async (req, res) => {
   });
 });
 
-/* ================= GET /api/shorturl/:short_url ================= */
-app.get('/api/shorturl/:short_url', async (req, res) => {
-  const shortUrl = Number(req.params.short_url);
+/* ================= REDIRECT ================= */
+app.get('/api/shorturl/:short_url', async function(req, res) {
+  const shortUrl = parseInt(req.params.short_url, 10);
 
-  // 🔥 CRITICAL FIX: Guard against NaN / undefined
-  if (!Number.isInteger(shortUrl)) {
+  if (isNaN(shortUrl)) {
     return res.json({ error: 'invalid url' });
   }
 
-  const found = await Url.findOne({ short_url: shortUrl });
+  try {
+    const found = await Url.findOne({ short_url: shortUrl });
+    if (!found) {
+      return res.json({ error: 'invalid url' });
+    }
 
-  if (!found) {
+    // Explicit 302 redirect - some test frameworks require this
+    return res.redirect(302, found.original_url);
+  } catch (error) {
     return res.json({ error: 'invalid url' });
   }
-
-  // FCC requires default 302 redirect
-  return res.redirect(found.original_url);
 });
 
 /* ================= START ================= */
-app.listen(port, () => {
-  console.log('Listening on port ' + port);
+app.listen(port, function() {
+  console.log(`Listening on port ${port}`);
 });
