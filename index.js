@@ -100,7 +100,8 @@ app.get('/api/shorturl/:short_url', async (req, res) => {
   }
 
   // Explicit status code for FCC runner
-  return res.redirect(301, found.original_url);
+  return res.redirect(found.original_url);
+
 });
 
 /* ================= START ================= */
